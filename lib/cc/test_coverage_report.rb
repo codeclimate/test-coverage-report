@@ -14,8 +14,7 @@ module CC
     def run
       puts "Running report repo=#{repo_slug} id=#{cc_repo.fetch("id")} from=#{from_commit.sha[0, 6]} to=#{commits.first.sha[0, 6]}"
 
-      collect_added_files
-      collect_line_numbers
+      collect_added_lines
       apply_coverage_info
 
       print
@@ -51,27 +50,11 @@ module CC
       @report ||= {}
     end
 
-    def collect_added_files
+    def collect_added_lines
       commit_comparison.files.select { |file| file.additions.positive? }.each do |file|
         if (patch = file.patch)
-          lines = patch.split("\n")
-          added = lines.select { |string| string.start_with?("+") }
-          report[file.filename] = added.map { |string| { body: string.sub(/^\+/, "") } }
-        end
-      end
-    end
-
-    def collect_line_numbers
-      report.each do |path, additions|
-        begin
-          contents = github_client.contents(repo_slug, path: path, ref: commits.first.sha)
-          contents_decoded = Base64.decode64(contents.content).split("\n")
-
-          additions.each do |addition|
-            addition[:line] = contents_decoded.index(addition[:body])
-          end
-        rescue Octokit::NotFound
-          report.delete(path)
+          patch = GitDiffParser::Patch.new(patch)
+          report[file.filename] = patch.changed_lines.map { |line| { line: line.number } }
         end
       end
     end
@@ -143,7 +126,7 @@ module CC
           commit_comparison.
           files.
           map(&:filename).
-          select { |filename| filename.end_with?(%w[js rb py php]) }
+          select { |filename| filename.end_with?("js", "rb", "py", "php") }
 
         params = {
           page: { size: commit_comparison.files.count },

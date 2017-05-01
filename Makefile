@@ -6,7 +6,8 @@ image:
 
 Gemfile.lock:
 	docker run --rm \
+		--entrypoint="/bin/sh" \
 		--user $(whoami):$(whoami) \
 		--volume $(PWD):/usr/src/app \
 		codeclimate/test-coverage-report \
-		bundle install
+		-c bundle install
