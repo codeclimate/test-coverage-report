@@ -4,7 +4,7 @@ prepare:
       path: base_rubocop.yml
 engines:
   bundler-audit:
-    enabled: false
+    enabled: true
   duplication:
     enabled: true
     config:

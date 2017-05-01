@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 module CC
   class TestCoverageReport
     NoTestReportFound = Class.new(StandardError)
@@ -10,7 +12,7 @@ module CC
     end
 
     def run
-      puts "Running report repo=#{repo_slug} id=#{cc_repo.fetch('id')} from=#{from_commit.sha[0,6]} to=#{commits.first.sha[0,6]}"
+      puts "Running report repo=#{repo_slug} id=#{cc_repo.fetch("id")} from=#{from_commit.sha[0, 6]} to=#{commits.first.sha[0, 6]}"
 
       collect_added_files
       collect_line_numbers
@@ -23,7 +25,7 @@ module CC
       if report.empty?
         puts "No added lines with test covearge information found"
       else
-        format="%40s\t%10s\n"
+        format = "%40s\t%10s\n"
         printf(format, "Path", "Added Lines Covered")
 
         lines = covered = 0
@@ -34,7 +36,7 @@ module CC
           lines += path_added_lines
           covered += path_covered_lines
 
-          printf(format,path.split("/").last, "#{path_covered_lines}/#{path_added_lines} - #{((path_covered_lines.to_f / path_added_lines) * 100).round(2)}%")
+          printf(format, path.split("/").last, "#{path_covered_lines}/#{path_added_lines} - #{((path_covered_lines.to_f / path_added_lines) * 100).round(2)}%")
         end
 
         puts "\n#{covered}/#{lines} - #{((covered.to_f / lines) * 100).round(2)}% added lines covered"
@@ -50,7 +52,7 @@ module CC
     end
 
     def collect_added_files
-      commit_comparison.files.select { |file| file.additions > 0 }.each do |file|
+      commit_comparison.files.select { |file| file.additions.positive? }.each do |file|
         if (patch = file.patch)
           lines = patch.split("\n")
           added = lines.select { |string| string.start_with?("+") }
@@ -76,14 +78,10 @@ module CC
 
     def apply_coverage_info
       report.each do |path, additions|
-        if (test_file_report = test_file_reports.find { |test_file_report| path == test_file_report.fetch("attributes").fetch("path") })
+        if (test_file_report = test_file_reports.find { |r| path == r.fetch("attributes").fetch("path") })
           additions.each do |addition|
             coverage = test_file_report.fetch("attributes").fetch("coverage")[addition[:line]]
-            if !coverage.nil? && coverage > 0
-              addition[:covered] = true
-            else
-              addition[:covered] = false
-            end
+            addition[:covered] = !coverage.nil? && coverage.positive?
           end
         else
           report.delete(path)
@@ -131,7 +129,7 @@ module CC
     end
 
     def commit_comparison
-      @commit_comparison ||= begin 
+      @commit_comparison ||= begin
         puts "Comparing on GitHub from=#{from_commit.sha} to=#{commits.first.sha}"
         comparison = github_client.compare(repo_slug, from_commit.sha, commits.first.sha)
         puts "#{comparison.total_commits} commits in comparison"
@@ -141,11 +139,16 @@ module CC
 
     def test_file_reports
       @test_file_reports ||= begin
-        file_paths = commit_comparison.files
-          .map(&:filename)
-          .select { |filename| filename.end_with?(*%w[js rb py php]) }
+        file_paths =
+          commit_comparison.
+          files.
+          map(&:filename).
+          select { |filename| filename.end_with?(%w[js rb py php]) }
 
-        params = { page: { size: commit_comparison.files.count }, filter: { path: { "$in" =>  file_paths } } }
+        params = {
+          page: { size: commit_comparison.files.count },
+          filter: { path: { "$in": file_paths } },
+        }
 
         response = cc_client.get("/v1/repos/#{cc_repo.fetch("id")}/test_reports/#{test_report.fetch("id")}/test_file_reports") do |request|
           request.params = params
@@ -154,7 +157,6 @@ module CC
         JSON.parse(response.body).fetch("data")
       end
     end
-
 
     def github_client
       @github_client ||= Octokit::Client.new(access_token: github_access_token)
