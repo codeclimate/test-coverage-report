@@ -1,0 +1,21 @@
+#!/usr/bin/env ruby
+
+$:.unshift File.expand_path("../lib", File.dirname(__FILE__))
+
+require "cc"
+
+days_since =
+  if (days = ARGV[1])
+    days.to_i
+  else
+    7
+  end
+
+report = CC::TestCoverageReport.new(
+  repo_slug: (ARGV.first or raise "GitHub repo must be passed as first argument"),
+  cc_access_token: ENV.fetch("CC_ACCESS_TOKEN"),
+  github_access_token: ENV.fetch("GITHUB_ACCESS_TOKEN"),
+  days_since: days_since,
+)
+
+report.run
