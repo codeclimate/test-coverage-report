@@ -2,6 +2,8 @@
 
 module CC
   class TestCoverageReport
+    File = Struct.new(:path, :lines)
+    Line = Struct.new(:number, :covered)
     NoTestReportFound = Class.new(StandardError)
 
     def initialize(repo_slug:, cc_access_token:, github_access_token:, days_since:)
@@ -11,71 +13,48 @@ module CC
       @days_since = days_since
     end
 
-    def run
-      puts "Running report repo=#{repo_slug} id=#{cc_repo.fetch("id")} from=#{from_commit.sha[0, 6]} to=#{commits.first.sha[0, 6]}"
-
-      collect_added_lines
-      apply_coverage_info
-
-      print
+    def find_test_report(path)
+      test_file_reports.find do |report|
+        path == report.fetch("attributes").fetch("path")
+      end
     end
 
-    def print
-      if report.empty?
-        puts "No added lines with test covearge information found"
-      else
-        format = "%40s\t%10s\n"
-        printf(format, "Path", "Added Lines Covered")
+    def run
+      files = patches.each_with_object([]) do |patch, memo|
+        if patch.changed_lines.any? && (test_file_report = find_test_report(patch.file))
+          coverage = test_file_report.fetch("attributes").fetch("coverage")
 
-        lines = covered = 0
-        report.each do |path, additions|
-          path_added_lines = additions.count
-          path_covered_lines = additions.select { |addition| addition[:covered] }.count
+          lines = patch.changed_line_numbers.map do |line_number|
+            covered = !coverage[line_number - 1].nil? && coverage[line_number - 1].nonzero?
+            Line.new(line_number, covered)
+          end
 
-          lines += path_added_lines
-          covered += path_covered_lines
-
-          printf(format, path.split("/").last, "#{path_covered_lines}/#{path_added_lines} - #{((path_covered_lines.to_f / path_added_lines) * 100).round(2)}%")
+          memo << File.new(patch.file, lines)
         end
-
-        puts "\n#{covered}/#{lines} - #{((covered.to_f / lines) * 100).round(2)}% added lines covered"
       end
+
+      print_report(files)
+    end
+
+    def print_report(files)
+      max_path_length = files.map(&:path).map(&:length).max
+      format = "%#{max_path_length}s\t%d/%d %.2f%\n"
+
+      files.each do |file|
+        printf(format, file.path, file.lines.count(&:covered), file.lines.count, covered_lines_percentage(file.lines))
+      end
+
+      all_lines = files.map(&:lines).flatten
+      printf(format, "Total", all_lines.count(&:covered), all_lines.count, covered_lines_percentage(all_lines))
     end
 
     private
 
     attr_reader :repo_slug, :cc_access_token, :github_access_token, :days_since
 
-    def report
-      @report ||= {}
-    end
-
-    def collect_added_lines
-      commit_comparison.files.select { |file| file.additions.positive? }.each do |file|
-        if (patch = file.patch)
-          patch = GitDiffParser::Patch.new(patch)
-          report[file.filename] = patch.changed_lines.map { |line| { line: line.number } }
-        end
-      end
-    end
-
-    def apply_coverage_info
-      report.each do |path, additions|
-        if (test_file_report = test_file_reports.find { |r| path == r.fetch("attributes").fetch("path") })
-          additions.each do |addition|
-            coverage = test_file_report.fetch("attributes").fetch("coverage")[addition[:line]]
-            addition[:covered] = !coverage.nil? && coverage.positive?
-          end
-        else
-          report.delete(path)
-        end
-      end
-    end
-
     def test_report(index = 0)
       @test_report ||= begin
         sha = commits.fetch(index).sha
-        puts "Fetching test report sha=#{sha}"
 
         response = cc_client.get("/v1/repos/#{cc_repo.fetch("id")}/test_reports") do |request|
           request.params = { filter: { commit_sha: sha } }
@@ -89,6 +68,16 @@ module CC
       else
         raise ex
       end
+    end
+
+    def test_file_report(file_path)
+      endpoint = "/v1/repos/#{cc_repo.fetch("id")}/test_reports/#{test_report.fetch("id")}/test_file_reports"
+
+      response = cc_client.get(endpoint) do |request|
+        request.params = { filter: { path: file_path } }
+      end
+
+      JSON.parse(response.body).fetch("data").first
     end
 
     def from_commit
@@ -111,34 +100,49 @@ module CC
       end
     end
 
-    def commit_comparison
-      @commit_comparison ||= begin
-        puts "Comparing on GitHub from=#{from_commit.sha} to=#{commits.first.sha}"
-        comparison = github_client.compare(repo_slug, from_commit.sha, commits.first.sha)
-        puts "#{comparison.total_commits} commits in comparison"
-        comparison
-      end
+    def eligible_file_paths
+      @eligible_file_paths ||=
+        patches.
+        map(&:file).
+        select { |filename| filename.end_with?("js", "rb", "py", "php") }.
+        reject { |filename| filename.end_with?("_spec.rb") }
     end
 
     def test_file_reports
       @test_file_reports ||= begin
-        file_paths =
-          commit_comparison.
-          files.
-          map(&:filename).
-          select { |filename| filename.end_with?("js", "rb", "py", "php") }
+        reports = []
 
-        params = {
-          page: { size: commit_comparison.files.count },
-          filter: { path: { "$in": file_paths } },
-        }
-
-        response = cc_client.get("/v1/repos/#{cc_repo.fetch("id")}/test_reports/#{test_report.fetch("id")}/test_file_reports") do |request|
-          request.params = params
+        eligible_file_paths.each_slice(20) do |paths|
+          params = { page: { size: paths.count }, filter: { path: { "$in": paths } } }
+          reports << fetch_test_file_reports(params)
         end
 
-        JSON.parse(response.body).fetch("data")
+        reports.flatten
       end
+    end
+
+    def fetch_test_file_reports(params)
+      endpoint = "/v1/repos/#{cc_repo.fetch("id")}/test_reports/#{test_report.fetch("id")}/test_file_reports"
+      response = cc_client.get(endpoint) { |request| request.params = params }
+
+      JSON.parse(response.body).fetch("data")
+    end
+
+    def covered_lines_percentage(lines)
+      ((lines.count(&:covered).to_f / lines.count) * 100).round(2)
+    end
+
+    def patches
+      @patches ||= GitDiffParser.parse(diff)
+    end
+
+    def diff
+      @diff ||= github_client.compare(
+        repo_slug,
+        from_commit.sha,
+        commits.first.sha,
+        accept: "application/vnd.github.diff",
+      )
     end
 
     def github_client
