@@ -25,7 +25,7 @@ module CC
           coverage = test_file_report.fetch("attributes").fetch("coverage")
 
           lines = patch.changed_line_numbers.map do |line_number|
-            covered = !coverage[line_number - 1].nil? && coverage[line_number - 1].nonzero?
+            covered = (hits = coverage[line_number - 1]) && hits > 0
             Line.new(line_number, covered)
           end
 
