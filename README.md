@@ -8,6 +8,14 @@
 Reports on test coverage for added lines of code within a specified timeframe.
 Uses GitHub and Code Climate APIs.
 
+## Usage
+
+You can the fetch latest version of the reporter by pulling from Docker Hub:
+
+```shell
+docker pull codeclimate/test-coverage-report
+```
+
 To use this reporting tool, you must have a [GitHub access token][] and a [Code
 Climate access token][] available.
 
